@@ -1,0 +1,2 @@
+4a475e23d08682b260d8c7b0dd397b59da14edb2c8ef4507ac82b20c8d18ec52  dist/memnet_agent-0.1.0-py3-none-any.whl
+06c5b7876c532357449f9f691e710acca0bfe1a1495a47684a3874a126c86e95  dist/memnet_agent-0.1.0.tar.gz

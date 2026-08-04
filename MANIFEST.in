@@ -1,0 +1,10 @@
+include README.md
+include PUBLISHING.md
+include CHANGELOG.md
+include LICENSE
+recursive-include examples *.py
+recursive-include tests *.py
+recursive-include .github *.yml
+recursive-include src/memnet_agent py.typed
+include SECURITY.md
+include CONTRIBUTING.md
