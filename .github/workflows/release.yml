@@ -31,6 +31,8 @@ jobs:
           python-version: "3.x"
       - name: Install build frontend
         run: python -m pip install --upgrade build
+      - name: Clean old distributions
+        run: rm -rf dist
       - name: Build wheel and source distribution
         run: python -m build
       - name: Store distributions
