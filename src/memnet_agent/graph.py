@@ -39,6 +39,36 @@ STOPWORDS = set(
 )
 EDGE_TYPE_WEIGHT = {"semantic": 1.0, "tag": 0.65, "temporal": 0.35, "inferred": 0.8}
 
+DEFAULT_DECAY_RATE = 0.98
+DEFAULT_DECAY_TIME_UNIT = 24 * 60 * 60.0
+DEFAULT_MERGE_THRESHOLD = 0.90
+DEFAULT_PRUNE_THRESHOLD = 0.025
+DEFAULT_MIN_RETAINED_NODES = 3
+
+LEGACY_DEFAULTS = {
+    "decay_rate": 0.85,
+    "decay_time_unit": 1.0,
+    "merge_threshold": 0.72,
+    "prune_threshold": 0.15,
+}
+
+def migrate_legacy_defaults(config: dict) -> tuple[dict, bool]:
+    """Upgrade unsafe 0.1.x defaults without overriding custom tuning."""
+    normalized = dict(config)
+    legacy = all(
+        key in normalized
+        and math.isclose(float(normalized[key]), value, rel_tol=0.0, abs_tol=1e-12)
+        for key, value in LEGACY_DEFAULTS.items()
+    )
+    if legacy:
+        normalized.update(
+            decay_rate=DEFAULT_DECAY_RATE,
+            decay_time_unit=DEFAULT_DECAY_TIME_UNIT,
+            merge_threshold=DEFAULT_MERGE_THRESHOLD,
+            prune_threshold=DEFAULT_PRUNE_THRESHOLD,
+        )
+    return normalized, legacy
+
 
 def tokenize(text: str) -> list[str]:
     return [w for w in TOKEN_RE.findall(text.lower()) if len(w) > 2 and w not in STOPWORDS]
@@ -79,14 +109,15 @@ class MemoryNet:
     def __init__(
         self,
         *,
-        decay_rate: float = 0.85,
-        decay_time_unit: float = 1.0,
-        merge_threshold: float = 0.72,
+        decay_rate: float = DEFAULT_DECAY_RATE,
+        decay_time_unit: float = DEFAULT_DECAY_TIME_UNIT,
+        merge_threshold: float = DEFAULT_MERGE_THRESHOLD,
         semantic_threshold: float = 0.35,
         semantic_top_k: int = 8,
         temporal_window: float = 3.0,
         temporal_top_k: int = 6,
-        prune_threshold: float = 0.15,
+        prune_threshold: float = DEFAULT_PRUNE_THRESHOLD,
+        min_retained_nodes: int = DEFAULT_MIN_RETAINED_NODES,
         max_tag_df_ratio: float = 0.18,
         max_tag_neighbors: int = 12,
     ) -> None:
@@ -94,6 +125,8 @@ class MemoryNet:
             raise ValueError("decay_rate must be in (0, 1]")
         if decay_time_unit <= 0:
             raise ValueError("decay_time_unit must be positive")
+        if min_retained_nodes < 0:
+            raise ValueError("min_retained_nodes must be non-negative")
         self.nodes: dict[str, Node] = {}
         self.edges: list[Edge] = []
         self._edge_index: dict[tuple[str, str, str], Edge] = {}
@@ -106,6 +139,7 @@ class MemoryNet:
         self.temporal_window = temporal_window
         self.temporal_top_k = temporal_top_k
         self.prune_threshold = prune_threshold
+        self.min_retained_nodes = int(min_retained_nodes)
         self.max_tag_df_ratio = max_tag_df_ratio
         self.max_tag_neighbors = max_tag_neighbors
         self.log: list[str] = []
@@ -349,6 +383,7 @@ class MemoryNet:
             for i in range(len(ids))
             for j in range(i + 1, len(ids))
             if sims[i, j] >= self.merge_threshold
+            and self._merge_compatible(self.nodes[ids[i]], self.nodes[ids[j]])
         ]
         used: set[str] = set()
         merged = 0
@@ -359,6 +394,20 @@ class MemoryNet:
             used.update((a, b))
             merged += 1
         return merged
+
+    @staticmethod
+    def _same_memory_scope(first: Node, second: Node) -> bool:
+        first_role = first.meta.get("role")
+        second_role = second.meta.get("role")
+        if first_role is not None or second_role is not None:
+            return first_role == second_role
+        return True
+
+    @classmethod
+    def _merge_compatible(cls, first: Node, second: Node) -> bool:
+        if first.meta.get("protected") or second.meta.get("protected"):
+            return False
+        return cls._same_memory_scope(first, second)
 
     def _original_sources(self, nodes: Iterable[Node]) -> list[str]:
         out: list[str] = []
@@ -387,7 +436,7 @@ class MemoryNet:
             ntype="fact",
             source_ids=self._original_sources(members),
             confidence=min(n.confidence for n in members),
-            meta={"operation": "merge", "merged_node_ids": member_ids},
+            meta=self._merged_metadata(members, member_ids),
         )
         merged.strength = max(n.strength for n in members)
         merged.access_count = sum(n.access_count for n in members)
@@ -405,6 +454,17 @@ class MemoryNet:
             self.nodes.pop(nid, None)
         self._rebuild_edge_indexes()
         return merged
+
+    @staticmethod
+    def _merged_metadata(members: list[Node], member_ids: list[str]) -> dict:
+        metadata = {"operation": "merge", "merged_node_ids": member_ids}
+        for key in ("role", "source", "category"):
+            values = {node.meta.get(key) for node in members if node.meta.get(key) is not None}
+            if len(values) == 1:
+                metadata[key] = values.pop()
+        if any(node.meta.get("protected") for node in members):
+            metadata["protected"] = True
+        return metadata
 
     def _split_mixed(self, now: float) -> int:
         candidates = [n for n in list(self.nodes.values()) if n.ntype == "fact" and len(n.text) > 500]
@@ -443,7 +503,7 @@ class MemoryNet:
                     ntype="fact",
                     source_ids=node.source_ids or [node.id],
                     confidence=node.confidence,
-                    meta={"operation": "split", "parent_node_id": node.id},
+                    meta={**node.meta, "operation": "split", "parent_node_id": node.id},
                 )
                 for part in parts
             ]
@@ -472,11 +532,14 @@ class MemoryNet:
         return splits
 
     def _prune(self) -> int:
-        dead = {
-            nid
-            for nid, node in self.nodes.items()
-            if node.strength * (0.5 + 0.5 * node.confidence) < self.prune_threshold
-        }
+        candidates = []
+        for nid, node in self.nodes.items():
+            durable = node.meta.get("protected") or node.meta.get("role") == "knowledge"
+            quality = node.strength * (0.5 + 0.5 * node.confidence)
+            if not durable and quality < self.prune_threshold:
+                candidates.append((quality, node.access_count, node.last_accessed, nid))
+        max_prunable = max(0, len(self.nodes) - self.min_retained_nodes)
+        dead = {item[3] for item in sorted(candidates)[:max_prunable]}
         if not dead:
             return 0
         for nid in dead:
@@ -502,7 +565,11 @@ class MemoryNet:
                     continue
                 other_id = edge.dst if edge.src == node.id else edge.src
                 other = self.nodes.get(other_id)
-                if other and other.ntype != "synthesis":
+                if (
+                    other
+                    and other.ntype != "synthesis"
+                    and self._same_memory_scope(node, other)
+                ):
                     candidates.append((edge.weight * other.strength, edge, other))
             candidates.sort(key=lambda x: (-x[0], x[2].id))
             partners = [item[2] for item in candidates[:2]]
@@ -665,6 +732,7 @@ class MemoryNet:
                 "temporal_window": self.temporal_window,
                 "temporal_top_k": self.temporal_top_k,
                 "prune_threshold": self.prune_threshold,
+                "min_retained_nodes": self.min_retained_nodes,
                 "max_tag_df_ratio": self.max_tag_df_ratio,
                 "max_tag_neighbors": self.max_tag_neighbors,
             }
@@ -690,7 +758,9 @@ class MemoryNet:
     def load(cls, path: str | Path) -> "MemoryNet":
         with sqlite3.connect(path) as conn:
             metadata = dict(conn.execute("SELECT key, value FROM metadata"))
-            config = json.loads(metadata.get("config", "{}"))
+            config, migrated = migrate_legacy_defaults(
+                json.loads(metadata.get("config", "{}"))
+            )
             net = cls(**config)
             for row in conn.execute(
                 "SELECT id,text,ntype,created_at,last_accessed,last_decayed,strength,"
@@ -705,4 +775,9 @@ class MemoryNet:
             for row in conn.execute("SELECT src,dst,etype,weight,created_at FROM edges"):
                 net.edges.append(Edge(*row))
             net._rebuild_edge_indexes()
+            if migrated:
+                now = time.time()
+                for node in net.nodes.values():
+                    node.last_decayed = max(node.last_decayed, now)
+                net.log.append("migrated legacy 0.1.x memory defaults to safe daily decay")
             return net

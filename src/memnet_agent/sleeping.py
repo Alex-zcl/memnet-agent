@@ -25,10 +25,10 @@ class SleepConfig:
     """
 
     mode: SleepMode = "idle"
-    idle_after_seconds: float = 30.0
-    check_interval_seconds: float = 5.0
-    maintenance_interval_seconds: float = 30.0
-    max_syntheses: int = 3
+    idle_after_seconds: float = 300.0
+    check_interval_seconds: float = 30.0
+    maintenance_interval_seconds: float = 3600.0
+    max_syntheses: int = 1
     schedule_start: str = "02:00"
     schedule_end: str = "05:00"
     timezone: str = "UTC"
@@ -60,10 +60,10 @@ class SleepConfig:
     def idle(
         cls,
         *,
-        after_seconds: float = 30.0,
-        check_every_seconds: float = 5.0,
-        maintenance_every_seconds: float = 30.0,
-        max_syntheses: int = 3,
+        after_seconds: float = 300.0,
+        check_every_seconds: float = 30.0,
+        maintenance_every_seconds: float = 3600.0,
+        max_syntheses: int = 1,
     ) -> "SleepConfig":
         return cls(
             mode="idle",
@@ -81,7 +81,7 @@ class SleepConfig:
         end: str = "05:00",
         timezone: str = "UTC",
         maintenance_every_seconds: float = 60.0,
-        max_syntheses: int = 3,
+        max_syntheses: int = 1,
         allow_interrupt: bool = False,
     ) -> "SleepConfig":
         return cls(
@@ -99,8 +99,8 @@ class SleepConfig:
         cls,
         *,
         count: int = 2,
-        maintenance_every_seconds: float = 30.0,
-        max_syntheses: int = 3,
+        maintenance_every_seconds: float = 3600.0,
+        max_syntheses: int = 1,
     ) -> "SleepConfig":
         return cls(
             mode="workers",

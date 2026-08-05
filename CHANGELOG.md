@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.2 — 2026-08-06
+
+- Changed decay defaults from per-second to conservative daily decay.
+- Lowered pruning and retained a minimum graph core.
+- Protected explicit knowledge from pruning.
+- Migrated untouched 0.1.x defaults automatically on load.
+- Existing `storage_path` databases load automatically.
+- Prevented merges across user, assistant and knowledge roles.
+- Excluded assistant responses from retrieval by default.
+- Removed quality-only unrelated retrieval matches.
+
 ## 0.1.1 — 2026-08-05
 
 - Fixed default `UTC` sleep configuration on Windows systems without a system IANA timezone database.
