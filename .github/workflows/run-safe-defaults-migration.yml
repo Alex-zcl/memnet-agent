@@ -36,7 +36,20 @@ jobs:
           PY
 
       - name: Apply migration
-        run: python /tmp/migrate.py
+        run: |
+          python /tmp/migrate.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/memnet_agent/memory.py')
+          text = path.read_text(encoding='utf-8')
+          block = '''        if migrated:\n            now = memory._now(None)\n            for node in memory.nodes.values():\n                node.last_decayed = max(node.last_decayed, now)\n            memory.log.append("migrated legacy 0.1.x memory defaults to safe daily decay")\n'''
+          first = text.find(block)
+          second = text.find(block, first + len(block))
+          if first < 0 or second < 0:
+              raise SystemExit('Expected duplicate migration block was not found')
+          text = text[:second] + text[second + len(block):]
+          path.write_text(text, encoding='utf-8')
+          PY
 
       - name: Install and test
         run: |
