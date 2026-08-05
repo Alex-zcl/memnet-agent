@@ -207,3 +207,22 @@ def test_worker_mode_starts_multiple_memory_workers() -> None:
         time.sleep(0.01)
     assert agent.memory.log
     agent.close()
+
+
+
+def test_storage_path_autoloads_existing_graph(tmp_path: Path) -> None:
+    path = tmp_path / "memory.sqlite"
+    first = MemoryAgent(lambda prompt: "answer", storage_path=path, sleep=SleepConfig.off())
+    first.learn("Atlas uses PostgreSQL")
+    first.close()
+    second = MemoryAgent(lambda prompt: "answer", storage_path=path, sleep=SleepConfig.off())
+    assert second.stats()["nodes_total"] >= 1
+    second.close()
+
+
+def test_assistant_responses_are_not_retrieved_by_default() -> None:
+    agent = MemoryAgent(lambda prompt: "assistant answer", sleep=SleepConfig.off())
+    agent.ask("hello")
+    result = agent.ask_with_trace("assistant answer")
+    assert all(hit.node.meta.get("role") != "assistant" for hit in result.memories)
+    agent.close()

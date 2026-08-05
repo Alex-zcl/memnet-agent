@@ -52,6 +52,7 @@ class MemoryAgent:
         storage_path: str | Path | None = None,
         update_memory: bool = True,
         remember_responses: bool = True,
+        include_assistant_memories: bool = False,
         top_k: int = 6,
         min_memory_score: float = 0.04,
         sleep: SleepConfig | None = None,
@@ -60,14 +61,19 @@ class MemoryAgent:
         prompt_builder: Callable[[str, list[MemoryHit], str], str] | None = None,
     ) -> None:
         self.model: BaseModelAdapter = adapt_model(model, method=model_method)
-        self.memory = self._coerce_memory(memory)
         self.storage_path = Path(storage_path) if storage_path is not None else None
-        if self.storage_path is None and isinstance(memory, (str, Path)):
-            source = Path(memory)
+        memory_source = memory
+        if memory_source is None and self.storage_path is not None:
+            if self.storage_path.exists() and self.storage_path.stat().st_size > 0:
+                memory_source = self.storage_path
+        self.memory = self._coerce_memory(memory_source)
+        if self.storage_path is None and isinstance(memory_source, (str, Path)):
+            source = Path(memory_source)
             if source.suffix.lower() in {".sqlite", ".sqlite3", ".db", ".json"}:
                 self.storage_path = source
         self.update_memory = bool(update_memory)
         self.remember_responses = bool(remember_responses)
+        self.include_assistant_memories = bool(include_assistant_memories)
         self.top_k = int(top_k)
         self.min_memory_score = float(min_memory_score)
         self.auto_save = bool(auto_save)
@@ -120,6 +126,7 @@ class MemoryAgent:
                     query,
                     top_k=self.top_k,
                     min_score=self.min_memory_score,
+                    exclude_roles=(None if self.include_assistant_memories else {"assistant"}),
                     reinforce=True,
                 )
             prompt = self.prompt_builder(query, hits, self.system_prompt)
@@ -150,6 +157,7 @@ class MemoryAgent:
                     query,
                     top_k=self.top_k,
                     min_score=self.min_memory_score,
+                    exclude_roles=(None if self.include_assistant_memories else {"assistant"}),
                     reinforce=True,
                 )
             prompt = self.prompt_builder(query, hits, self.system_prompt)

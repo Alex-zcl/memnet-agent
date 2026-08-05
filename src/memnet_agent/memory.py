@@ -15,7 +15,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from .exceptions import GraphFormatError
-from .graph import EDGE_TYPE_WEIGHT, Edge, MemoryNet, Node, tokenize
+from .graph import EDGE_TYPE_WEIGHT, Edge, MemoryNet, Node, migrate_legacy_defaults, tokenize
 from .version import __version__
 
 
@@ -55,6 +55,7 @@ class AssociativeMemory(MemoryNet):
         top_k: int = 8,
         min_score: float = 0.04,
         node_types: Iterable[str] | None = None,
+        exclude_roles: Iterable[str] | None = None,
         reinforce: bool = True,
         ts: float | None = None,
     ) -> list[MemoryHit]:
@@ -65,8 +66,11 @@ class AssociativeMemory(MemoryNet):
             return []
 
         allowed = set(node_types) if node_types is not None else None
+        blocked_roles = set(exclude_roles or ())
         candidates = [
-            node for node in self.nodes.values() if allowed is None or node.ntype in allowed
+            node for node in self.nodes.values()
+            if (allowed is None or node.ntype in allowed)
+            and node.meta.get("role") not in blocked_roles
         ]
         if not candidates:
             return []
@@ -95,8 +99,8 @@ class AssociativeMemory(MemoryNet):
             tag_score = len(matched) / len(union) if union else 0.0
             semantic_score = float(semantic[index])
             quality = min(1.0, node.strength / 1.5) * (0.5 + 0.5 * node.confidence)
-            # Relevance dominates; quality breaks ties without hiding weak but exact matches.
-            score = 0.76 * semantic_score + 0.16 * tag_score + 0.08 * quality
+            relevance = 0.82 * semantic_score + 0.18 * tag_score
+            score = relevance * (0.90 + 0.10 * quality)
             if score >= min_score:
                 hits.append(
                     MemoryHit(
@@ -126,6 +130,7 @@ class AssociativeMemory(MemoryNet):
             "temporal_window": self.temporal_window,
             "temporal_top_k": self.temporal_top_k,
             "prune_threshold": self.prune_threshold,
+            "min_retained_nodes": self.min_retained_nodes,
             "max_tag_df_ratio": self.max_tag_df_ratio,
             "max_tag_neighbors": self.max_tag_neighbors,
         }
@@ -143,7 +148,7 @@ class AssociativeMemory(MemoryNet):
     def from_dict(cls, payload: dict[str, Any]) -> "AssociativeMemory":
         if payload.get("format") not in {None, "memnet-agent-graph"}:
             raise GraphFormatError("JSON does not contain a memnet-agent graph.")
-        config = dict(payload.get("config") or {})
+        config, migrated = migrate_legacy_defaults(dict(payload.get("config") or {}))
         memory = cls(**config)
         try:
             for raw_node in payload.get("nodes", []):
@@ -154,6 +159,11 @@ class AssociativeMemory(MemoryNet):
         except (TypeError, KeyError) as exc:
             raise GraphFormatError(f"Invalid graph JSON: {exc}") from exc
         memory._rebuild_edge_indexes()
+        if migrated:
+            now = memory._now(None)
+            for node in memory.nodes.values():
+                node.last_decayed = max(node.last_decayed, now)
+            memory.log.append("migrated legacy 0.1.x memory defaults to safe daily decay")
         errors = memory.validate()
         if errors:
             raise GraphFormatError("Invalid graph: " + "; ".join(errors[:5]))

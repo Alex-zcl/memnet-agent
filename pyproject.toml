@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "memnet-agent"
-version = "0.1.1"
+version = "0.1.2"
 description = "Model-agnostic text agents with associative graph memory, consolidation and dataset export"
 readme = "README.md"
 requires-python = ">=3.10"

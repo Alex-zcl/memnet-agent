@@ -57,3 +57,30 @@ def test_legacy_sqlite_is_migrated(tmp_path) -> None:
     assert memory.nodes["a"].last_decayed == 1.0
     assert memory.nodes["a"].meta["imported_schema"] == "legacy-sqlite-v1"
     assert not memory.validate()
+
+
+
+def test_safe_defaults_do_not_prune_recent_memory() -> None:
+    memory = AssociativeMemory()
+    node = memory.add("A recent durable conversational memory", ts=100.0)
+    result = memory.sleep(now=160.0, max_syntheses=0)
+    assert result["pruned"] == 0
+    assert node.id in memory.nodes
+    assert memory.decay_time_unit == 86400.0
+
+
+def test_explicit_knowledge_is_protected_from_pruning() -> None:
+    memory = AssociativeMemory(prune_threshold=0.9, min_retained_nodes=0)
+    node = memory.add("User name is Alexander", meta={"role": "knowledge", "protected": True})
+    node.strength = 0.001
+    memory.sleep(max_syntheses=0)
+    assert node.id in memory.nodes
+
+
+def test_different_roles_are_not_merged() -> None:
+    memory = AssociativeMemory(merge_threshold=0.0)
+    user = memory.add("My name is Sasha", meta={"role": "user"})
+    assistant = memory.add("My name is Sasha", meta={"role": "assistant"})
+    memory.sleep(max_syntheses=0)
+    assert user.id in memory.nodes
+    assert assistant.id in memory.nodes
