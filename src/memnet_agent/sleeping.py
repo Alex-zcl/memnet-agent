@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time as clock_time
+from datetime import datetime, time as clock_time, timezone
 from typing import Literal
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 SleepMode = Literal["off", "idle", "scheduled", "workers"]
 
@@ -50,7 +50,7 @@ class SleepConfig:
             raise ValueError("worker_count must be at least 1")
         _parse_clock(self.schedule_start)
         _parse_clock(self.schedule_end)
-        ZoneInfo(self.timezone)
+        _resolve_timezone(self.timezone)
 
     @classmethod
     def off(cls) -> "SleepConfig":
@@ -112,7 +112,7 @@ class SleepConfig:
     def in_scheduled_window(self, moment: datetime | None = None) -> bool:
         if self.mode != "scheduled":
             return False
-        zone = ZoneInfo(self.timezone)
+        zone = _resolve_timezone(self.timezone)
         now = moment.astimezone(zone) if moment is not None else datetime.now(zone)
         current = now.timetz().replace(tzinfo=None)
         start = _parse_clock(self.schedule_start)
@@ -122,6 +122,18 @@ class SleepConfig:
         if start < end:
             return start <= current < end
         return current >= start or current < end
+
+
+def _resolve_timezone(value: str):
+    normalized = value.strip().upper()
+    if normalized in {"UTC", "ETC/UTC", "GMT", "Z"}:
+        return timezone.utc
+    try:
+        return ZoneInfo(value)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(
+            f"Unknown timezone {value!r}. Install the 'tzdata' package or use 'UTC'."
+        ) from exc
 
 
 def _parse_clock(value: str) -> clock_time:
